@@ -1,0 +1,38 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ---------------------------
+# 1. LOAD MATRIX FROM cat.txt
+# ---------------------------
+# First line: rows cols
+with open("catNew.txt", "r") as f:
+    header = f.readline().split()
+    rows, cols = map(int, header)
+
+# Load the remaining numbers
+data = np.loadtxt("catNew.txt", skiprows=1)
+
+# Make sure it's the right size and reshape
+data = np.asarray(data, dtype=float)
+flat = data.ravel()
+if flat.size < rows * cols:
+    raise ValueError(f"Not enough data: need {rows*cols}, got {flat.size}")
+A = flat[: rows * cols].reshape(rows, cols)
+
+print("Matrix shape:", A.shape)
+
+# ---------------------------
+# 2. NORMALIZE TO [0, 1]
+# ---------------------------
+A_min = A.min()
+A_max = A.max()
+if A_max > A_min:
+    A_norm = (A - A_min) / (A_max - A_min)
+else:
+    A_norm = np.zeros_like(A)
+
+# ---------------------------
+# 3. SAVE AS IMAGE
+# ---------------------------
+plt.imsave("cat_from_matrix.png", A_norm, cmap="gray")
+print("Saved image as cat_from_matrix.png")
