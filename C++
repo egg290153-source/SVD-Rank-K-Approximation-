@@ -1,0 +1,282 @@
+#include <vector>
+#include <cmath>
+#include <algorithm>
+#include <iostream>
+#include <fstream>
+using namespace std;
+
+using Matrix = vector<vector<double>>;
+
+// ---------- Utility function declarations ----------
+void   printMatrix(const Matrix& M);
+void   printVector(const vector<double>& v);
+Matrix matmul(const Matrix& A, const Matrix& B);
+Matrix transpose(const Matrix& A);
+vector<double> MultiplyMatrixVector(const Matrix& A, const vector<double>& x);
+double maxNorm(const vector<double>& x);
+void   normalizeMaxNorm(vector<double>& x);
+double l2Norm(const vector<double>& x);
+void   normalizeL2(vector<double>& x);
+Matrix loadImageTxt(const string& filename);
+void   saveImageTxt(const string& filename, const Matrix& A);
+
+// ---------- Eigen / power iteration helpers ----------
+double        eigenValue(const Matrix& A, const vector<double>& x);
+vector<double> powerIteration(const Matrix& A, int maxIter = 50);
+Matrix        deflate(const Matrix& A, double lambda, const vector<double>& v);
+
+// =====================================================
+//                        MAIN
+// =====================================================
+int main() {
+    // 1. Load the input image matrix
+    Matrix A = loadImageTxt("cat.txt");
+    if (A.empty()) {
+        cerr << "Error loading cat.txt\n";
+        return 1;
+    }
+
+    int m = static_cast<int>(A.size());
+    int n = static_cast<int>(A[0].size());
+    cout << "Loaded image of size " << m << " x " << n << "\n";
+
+    // 2. Choose rank k (number of singular values/vectors to keep)
+    int k = 10;                        // you can set 5, 10, 70, ...
+    k = min(k, min(m, n));            // safety: k <= min(m,n)
+    cout << "Using k = " << k << "\n";
+
+    // 3. Build P = A^T A (n x n)
+    Matrix At = transpose(A);
+    Matrix P  = matmul(At, A);
+
+    // 4. Allocate SVD components
+    Matrix U(m, vector<double>(k, 0.0)); // m x k
+    Matrix Vt(k, vector<double>(n, 0.0)); // k x n
+    vector<double> S(k, 0.0);            // singular values
+
+    Matrix P_current = P;                // deflated matrix for eigenvectors
+
+    // 5. Power iteration + deflation to get top k eigenpairs of P
+    for (int idx = 0; idx < k; ++idx) {
+        // dominant eigenvector of current P_current
+        vector<double> v = powerIteration(P_current);
+        normalizeL2(v);
+
+        // eigenvalue of P_current in direction v
+        double lambda = eigenValue(P_current, v);
+        if (lambda < 1e-12) {
+            cerr << "lambda too small, breaking at idx = " << idx << "\n";
+            break;
+        }
+
+        double sigma = sqrt(lambda); // singular value
+        S[idx] = sigma;
+
+        // store v^T in Vt (row idx)
+        for (int j = 0; j < n; ++j)
+            Vt[idx][j] = v[j];
+
+        // left singular vector u = (A v) / sigma
+        vector<double> u = MultiplyMatrixVector(A, v);
+        for (double &x : u) x /= sigma;
+        normalizeL2(u);
+
+        for (int i = 0; i < m; ++i)
+            U[i][idx] = u[i];
+
+        // deflation: remove this eigenpair from P_current
+        P_current = deflate(P_current, lambda, v);
+    }
+
+    // 6. Build Sigma_k (k x k diagonal matrix)
+    Matrix Sigma(k, vector<double>(k, 0.0));
+    for (int i = 0; i < k; ++i)
+        Sigma[i][i] = S[i];
+
+    // 7. Reconstruct low-rank approximation: A_k = U_k * Sigma_k * V_k^T
+    Matrix US  = matmul(U, Sigma);   // m x k
+    Matrix A_k = matmul(US, Vt);     // m x n  (same size as original!)
+
+    cout << "A_k size: " << A_k.size() << " x " << A_k[0].size() << "\n";
+
+    // 8. Save ONLY the reconstructed image matrix
+    saveImageTxt("catNew.txt", A_k);
+    cout << "Saved rank-" << k << " approximation to catNew.txt\n";
+
+    return 0;
+}
+
+// =====================================================
+//                Utility function definitions
+// =====================================================
+
+void printMatrix(const Matrix& M) {
+    for (int i = 0; i < (int)M.size(); ++i) {
+        for (int j = 0; j < (int)M[i].size(); ++j)
+            cout << M[i][j] << " ";
+        cout << "\n";
+    }
+    cout << "\n";
+}
+
+void printVector(const vector<double>& v) {
+    for (double x : v) cout << x << " ";
+    cout << "\n";
+}
+
+Matrix transpose(const Matrix& A) {
+    int m = A.size();
+    int n = A[0].size();
+    Matrix T(n, vector<double>(m));
+    for (int i = 0; i < m; ++i)
+        for (int j = 0; j < n; ++j)
+            T[j][i] = A[i][j];
+    return T;
+}
+
+Matrix matmul(const Matrix& A, const Matrix& B) {
+    int m = A.size();
+    int n = A[0].size();
+    int p = B[0].size();
+    Matrix C(m, vector<double>(p, 0.0));
+
+    for (int i = 0; i < m; ++i)
+        for (int j = 0; j < p; ++j)
+            for (int k = 0; k < n; ++k)
+                C[i][j] += A[i][k] * B[k][j];
+
+    return C;
+}
+
+vector<double> MultiplyMatrixVector(const Matrix& A, const vector<double>& x) {
+    int m = A.size();
+    int n = A[0].size();
+    vector<double> result(m, 0.0);
+    for (int i = 0; i < m; ++i)
+        for (int j = 0; j < n; ++j)
+            result[i] += A[i][j] * x[j];
+    return result;
+}
+
+double maxNorm(const vector<double>& x) {
+    double m = 0.0;
+    for (double v : x) {
+        double a = fabs(v);
+        if (a > m) m = a;
+    }
+    return m;
+}
+
+void normalizeMaxNorm(vector<double>& x) {
+    double m = maxNorm(x);
+    if (m == 0) return;
+    for (double &v : x) v /= m;
+}
+
+double l2Norm(const vector<double>& x) {
+    double s = 0.0;
+    for (double v : x) s += v * v;
+    return sqrt(s);
+}
+
+void normalizeL2(vector<double>& x) {
+    double nrm = l2Norm(x);
+    if (nrm == 0) return;
+    for (double &v : x) v /= nrm;
+}
+
+// =====================================================
+//                Eigen / power helpers
+// =====================================================
+
+double eigenValue(const Matrix& A, const vector<double>& x) {
+    vector<double> Ax = MultiplyMatrixVector(A, x);
+    double num = 0.0, den = 0.0;
+    for (int i = 0; i < (int)x.size(); ++i) {
+        num += x[i] * Ax[i];
+        den += x[i] * x[i];
+    }
+    return num / den;
+}
+
+// dominant eigenvector via power iteration
+vector<double> powerIteration(const Matrix& A, int maxIter) {
+    int n = A.size();           // A is n x n
+    vector<double> x(n, 1.0);   // initial guess
+    normalizeMaxNorm(x);
+
+    for (int iter = 0; iter < maxIter; ++iter) {
+        vector<double> y = MultiplyMatrixVector(A, x);
+        normalizeMaxNorm(y);
+        x = y;
+    }
+    normalizeL2(x);
+    return x;
+}
+
+// Deflation: A_def = A - lambda * (v/||v||)*(v/||v||)^T
+Matrix deflate(const Matrix& A, double lambda, const vector<double>& v) {
+    int n = A.size();
+    Matrix A_def(n, vector<double>(n, 0.0));
+
+    // we want lambda * u*u^T with u = v / ||v||,
+    // which equals (lambda / ||v||^2) * v * v^T
+    double norm2 = 0.0;
+    for (double val : v) norm2 += val * val;
+    double scale = (norm2 == 0.0) ? 0.0 : lambda / norm2;
+
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            A_def[i][j] = A[i][j] - scale * v[i] * v[j];
+
+    return A_def;
+}
+
+// =====================================================
+//          Load / save image as text matrix
+// =====================================================
+
+// Reads "rows cols" then rows*cols pixel values into a Matrix
+Matrix loadImageTxt(const string& filename) {
+    ifstream in(filename);
+    if (!in) {
+        cerr << "Error: cannot open " << filename << endl;
+        return {};
+    }
+
+    int rows, cols;
+    in >> rows >> cols;
+    if (!in) {
+        cerr << "Error: bad header in " << filename << endl;
+        return {};
+    }
+
+    Matrix A(rows, vector<double>(cols, 0.0));
+
+    for (int i = 0; i < rows; ++i) {
+        for (int j = 0; j < cols; ++j) {
+            double pix;
+            in >> pix;
+            if (!in) {
+                cerr << "Error: not enough pixel values in " << filename << endl;
+                return {};
+            }
+            A[i][j] = pix;
+        }
+    }
+
+    return A;
+}
+
+void saveImageTxt(const string& filename, const Matrix& A) {
+    ofstream out(filename);
+    int rows = A.size();
+    int cols = A[0].size();
+    out << rows << " " << cols << "\n";
+    for (int i = 0; i < rows; ++i) {
+        for (int j = 0; j < cols; ++j) {
+            out << A[i][j] << " ";
+        }
+        out << "\n";
+    }
+}
